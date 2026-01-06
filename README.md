@@ -25,6 +25,8 @@ A comprehensive disk inventory tool for Proxmox VE clusters that scans all nodes
 - Root privileges (or sudo)
 - Optional: `smartmontools` package for enhanced disk information
 
+**Security Note:** The script uses `StrictHostKeyChecking=accept-new` for SSH connections, which accepts new host keys but verifies known ones. In a Proxmox cluster, SSH keys are typically pre-configured and trusted. If you need stricter security policies, modify the `SSH_OPTS` variable in `includes/disk_inventory_lib.sh`.
+
 #### Installation
 
 ```bash

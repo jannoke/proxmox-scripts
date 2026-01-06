@@ -109,16 +109,15 @@ main() {
         printf "  %-15s  %-6s  %-10s  %-30s  %-20s\n" \
             "───────────────" "──────" "──────────" "──────────────────────────────" "────────────────────"
         
-        # Get all disks on this node
-        local ssh_prefix=""
-        if [ "$node" != "localhost" ] && [ "$node" != "$(hostname)" ]; then
-            ssh_prefix="ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${node}"
-        fi
-        
         # Get list of disk devices
         local disks=()
-        if [ -n "$ssh_prefix" ]; then
-            disks=($($ssh_prefix "lsblk -d -o NAME -n | grep -E '^(sd|nvme|vd)' | grep -v -E '[0-9]$'"))
+        local ssh_cmd=()
+        if [ "$node" != "localhost" ] && [ "$node" != "$(hostname)" ]; then
+            ssh_cmd=(ssh ${SSH_OPTS} "root@${node}")
+        fi
+        
+        if [ ${#ssh_cmd[@]} -gt 0 ]; then
+            disks=($("${ssh_cmd[@]}" "lsblk -d -o NAME -n | grep -E '^(sd|nvme|vd)' | grep -v -E '[0-9]$'"))
         else
             disks=($(lsblk -d -o NAME -n | grep -E '^(sd|nvme|vd)' | grep -v -E '[0-9]$'))
         fi
