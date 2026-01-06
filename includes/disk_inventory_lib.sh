@@ -6,12 +6,19 @@
 # If you need stricter security, modify these options or use SSH config
 declare -a SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=5)
 
+# Disk device pattern for filtering block devices
+# Matches: sda-sdz, nvme0n1-nvme99n99, vda-vdz
+readonly DISK_PATTERN='^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+)$'
+
+# Network timeout for node reachability check (seconds)
+readonly PING_TIMEOUT=5
+
 # Get cluster nodes from Proxmox cluster configuration
 get_cluster_nodes() {
     local nodes=()
     
     # Check if running on a Proxmox cluster node
-    if [ -f /etc/pve/corosync.conf ]; then
+    if [ -f /etc/pve/corosync.conf ] && [ -r /etc/pve/corosync.conf ]; then
         # Parse corosync.conf for node names/IPs
         # Use awk to properly parse the nodelist section, handling various whitespace
         mapfile -t nodes < <(awk '/nodelist/,/^[[:space:]]*\}/ {
@@ -21,7 +28,7 @@ get_cluster_nodes() {
                 gsub(/[[:space:]]*$/, "");
                 print $0;
             }
-        }' /etc/pve/corosync.conf | sort -u)
+        }' /etc/pve/corosync.conf 2>/dev/null | sort -u)
     fi
     
     # If no cluster configuration found, use localhost
@@ -123,7 +130,7 @@ check_node_reachable() {
         return 0
     fi
     
-    # Try to ping the node
-    ping -c 1 -W 2 "$node" &>/dev/null
+    # Try to ping the node with configurable timeout
+    ping -c 1 -W "$PING_TIMEOUT" "$node" &>/dev/null
     return $?
 }

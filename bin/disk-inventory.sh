@@ -118,9 +118,9 @@ main() {
         fi
         
         if [ ${#ssh_cmd[@]} -gt 0 ]; then
-            mapfile -t disks < <("${ssh_cmd[@]}" "lsblk -d -o NAME -n | grep -E '^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+)$'")
+            mapfile -t disks < <("${ssh_cmd[@]}" "lsblk -d -o NAME -n | grep -E '${DISK_PATTERN}'")
         else
-            mapfile -t disks < <(lsblk -d -o NAME -n | grep -E '^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+)$')
+            mapfile -t disks < <(lsblk -d -o NAME -n | grep -E "${DISK_PATTERN}")
         fi
         
         # Process each disk
