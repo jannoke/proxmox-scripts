@@ -113,13 +113,13 @@ main() {
         local disks=()
         local ssh_cmd=()
         if [ "$node" != "localhost" ] && [ "$node" != "$(hostname)" ]; then
-            ssh_cmd=(ssh ${SSH_OPTS} "root@${node}")
+            ssh_cmd=(ssh "${SSH_OPTS[@]}" "root@${node}")
         fi
         
         if [ ${#ssh_cmd[@]} -gt 0 ]; then
-            disks=($("${ssh_cmd[@]}" "lsblk -d -o NAME -n | grep -E '^(sd|nvme|vd)' | grep -v -E '[0-9]$'"))
+            disks=($("${ssh_cmd[@]}" "lsblk -d -o NAME -n | grep -E '^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+)$'"))
         else
-            disks=($(lsblk -d -o NAME -n | grep -E '^(sd|nvme|vd)' | grep -v -E '[0-9]$'))
+            disks=($(lsblk -d -o NAME -n | grep -E '^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+)$'))
         fi
         
         # Process each disk

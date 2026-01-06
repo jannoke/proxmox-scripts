@@ -4,7 +4,7 @@
 # SSH options for cluster communication
 # In Proxmox clusters, nodes are typically pre-configured with trusted SSH keys
 # If you need stricter security, modify these options or use SSH config
-SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=5"
+declare -a SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=5)
 
 # Get cluster nodes from Proxmox cluster configuration
 get_cluster_nodes() {
@@ -14,7 +14,7 @@ get_cluster_nodes() {
     if [ -f /etc/pve/corosync.conf ]; then
         # Parse corosync.conf for node names/IPs
         # Use awk to properly parse the nodelist section
-        nodes=($(awk '/nodelist {/,/}/ {if ($1 == "name:") print $2}' /etc/pve/corosync.conf | sort -u))
+        nodes=($(awk '/nodelist/,/^[[:space:]]*\}/ {if ($1 == "name:") print $2}' /etc/pve/corosync.conf | sort -u))
     fi
     
     # If no cluster configuration found, use localhost
@@ -32,7 +32,7 @@ get_disk_info() {
     
     # Set up SSH command array if not localhost
     if [ "$node" != "localhost" ] && [ "$node" != "$(hostname)" ]; then
-        ssh_cmd=(ssh ${SSH_OPTS} "root@${node}")
+        ssh_cmd=(ssh "${SSH_OPTS[@]}" "root@${node}")
     fi
     
     # Get all block devices
@@ -51,11 +51,11 @@ detect_disk_type() {
     
     # Set up SSH command array if not localhost
     if [ "$node" != "localhost" ] && [ "$node" != "$(hostname)" ]; then
-        ssh_cmd=(ssh ${SSH_OPTS} "root@${node}")
+        ssh_cmd=(ssh "${SSH_OPTS[@]}" "root@${node}")
     fi
     
-    # Check if NVMe
-    if [[ $disk == nvme* ]]; then
+    # Check if NVMe (nvme devices include the namespace, e.g., nvme0n1, nvme1n1)
+    if [[ $disk =~ ^nvme[0-9]+n[0-9]+$ ]]; then
         echo "NVMe"
         return
     fi
@@ -83,7 +83,7 @@ get_detailed_disk_info() {
     
     # Set up SSH command array if not localhost
     if [ "$node" != "localhost" ] && [ "$node" != "$(hostname)" ]; then
-        ssh_cmd=(ssh ${SSH_OPTS} "root@${node}")
+        ssh_cmd=(ssh "${SSH_OPTS[@]}" "root@${node}")
     fi
     
     # Try to get more detailed info from smartctl
