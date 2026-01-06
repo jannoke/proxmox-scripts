@@ -13,8 +13,15 @@ get_cluster_nodes() {
     # Check if running on a Proxmox cluster node
     if [ -f /etc/pve/corosync.conf ]; then
         # Parse corosync.conf for node names/IPs
-        # Use awk to properly parse the nodelist section
-        nodes=($(awk '/nodelist/,/^[[:space:]]*\}/ {if ($1 == "name:") print $2}' /etc/pve/corosync.conf | sort -u))
+        # Use awk to properly parse the nodelist section, handling various whitespace
+        mapfile -t nodes < <(awk '/nodelist/,/^[[:space:]]*\}/ {
+            if ($0 ~ /name:/) {
+                # Extract the value after "name:", handling various formats
+                gsub(/^[[:space:]]*name:[[:space:]]*/, "");
+                gsub(/[[:space:]]*$/, "");
+                print $0;
+            }
+        }' /etc/pve/corosync.conf | sort -u)
     fi
     
     # If no cluster configuration found, use localhost
@@ -23,24 +30,6 @@ get_cluster_nodes() {
     fi
     
     echo "${nodes[@]}"
-}
-
-# Get disk information from a node
-get_disk_info() {
-    local node=$1
-    local ssh_cmd=()
-    
-    # Set up SSH command array if not localhost
-    if [ "$node" != "localhost" ] && [ "$node" != "$(hostname)" ]; then
-        ssh_cmd=(ssh "${SSH_OPTS[@]}" "root@${node}")
-    fi
-    
-    # Get all block devices
-    if [ ${#ssh_cmd[@]} -gt 0 ]; then
-        "${ssh_cmd[@]}" "lsblk -d -o NAME,TYPE,SIZE,MODEL,SERIAL -n | grep -E 'disk'"
-    else
-        lsblk -d -o NAME,TYPE,SIZE,MODEL,SERIAL -n | grep -E 'disk'
-    fi
 }
 
 # Detect disk type (NVMe, SSD, HDD)

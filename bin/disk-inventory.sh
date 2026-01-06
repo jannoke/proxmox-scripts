@@ -80,7 +80,8 @@ main() {
     
     # Get cluster nodes
     echo -e "${CYAN}Detecting cluster nodes...${NC}"
-    local nodes=($(get_cluster_nodes))
+    local nodes=()
+    mapfile -t nodes < <(get_cluster_nodes | tr ' ' '\n')
     echo "Found ${#nodes[@]} node(s): ${nodes[*]}"
     echo ""
     
@@ -117,19 +118,14 @@ main() {
         fi
         
         if [ ${#ssh_cmd[@]} -gt 0 ]; then
-            disks=($("${ssh_cmd[@]}" "lsblk -d -o NAME -n | grep -E '^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+)$'"))
+            mapfile -t disks < <("${ssh_cmd[@]}" "lsblk -d -o NAME -n | grep -E '^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+)$'")
         else
-            disks=($(lsblk -d -o NAME -n | grep -E '^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+)$'))
+            mapfile -t disks < <(lsblk -d -o NAME -n | grep -E '^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+)$')
         fi
         
         # Process each disk
         local node_disk_count=0
         for disk in "${disks[@]}"; do
-            # Skip if it's a partition
-            if [[ $disk =~ [0-9]$ ]] || [[ $disk =~ p[0-9]$ ]]; then
-                continue
-            fi
-            
             # Detect disk type
             local disk_type=$(detect_disk_type "$disk" "$node")
             
