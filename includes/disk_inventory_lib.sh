@@ -17,21 +17,14 @@ readonly PING_TIMEOUT=5
 get_cluster_nodes() {
     local nodes=()
     
-    # Check if running on a Proxmox cluster node
-    if [ -f /etc/pve/corosync.conf ] && [ -r /etc/pve/corosync.conf ]; then
-        # Parse corosync.conf for node names/IPs
-        # Use awk to properly parse the nodelist section, handling various whitespace
-        mapfile -t nodes < <(awk '/nodelist/,/^[[:space:]]*\}/ {
-            if ($0 ~ /name:/) {
-                # Extract the value after "name:", handling various formats
-                gsub(/^[[:space:]]*name:[[:space:]]*/, "");
-                gsub(/[[:space:]]*$/, "");
-                print $0;
-            }
-        }' /etc/pve/corosync.conf 2>/dev/null | sort -u)
+    # Check if pvecm command is available (running on a Proxmox cluster node)
+    if command -v pvecm &>/dev/null; then
+        # Use pvecm nodes to get cluster node list
+        # Extract node names from the output, stripping (local) marker
+        mapfile -t nodes < <(pvecm nodes 2>/dev/null | awk '/^[[:space:]]*[0-9]/ {print $3}' | sed 's/(local)//' | sort -u)
     fi
     
-    # If no cluster configuration found, use localhost
+    # If no cluster nodes found, use localhost
     if [ ${#nodes[@]} -eq 0 ]; then
         nodes=("localhost")
     fi
