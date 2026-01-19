@@ -91,7 +91,7 @@ Summary
 
 #### How It Works
 
-1. **Cluster Detection**: The script reads `/etc/pve/corosync.conf` to identify all nodes in the cluster
+1. **Cluster Detection**: The script uses `pvecm nodes` command to dynamically identify all nodes in the cluster
 2. **Node Connection**: For each node, it establishes an SSH connection (or uses local commands for the current node)
 3. **Disk Discovery**: Uses `lsblk` to find all physical disk devices
 4. **Type Classification**: Determines disk type (NVMe/SSD/HDD) based on device name and rotational flag
