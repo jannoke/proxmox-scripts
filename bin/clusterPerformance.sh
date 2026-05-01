@@ -45,6 +45,11 @@ LOG_FILE=""
 USE_SYSLOG=false
 SSH_TIMEOUT=$DEFAULT_SSH_TIMEOUT
 DO_BACKUP=false
+PER_NODE_GOVERNORS=""
+
+# Node mapping (built at runtime from /etc/pve/corosync.conf)
+declare -A NODE_HOSTNAMES  # IP -> hostname
+declare -A NODE_IPS        # hostname -> IP
 
 # ============================================================
 # Logging
@@ -136,6 +141,34 @@ get_cluster_nodes() {
     echo "${nodes[@]}"
 }
 
+# Build NODE_HOSTNAMES (IP->hostname) and NODE_IPS (hostname->IP) from corosync.conf
+build_node_mapping() {
+    if [ ! -f /etc/pve/corosync.conf ]; then
+        return
+    fi
+
+    local cur_name=""
+    local cur_addr=""
+
+    while IFS= read -r line; do
+        # Reset on start of a new node block
+        if [[ $line =~ node[[:space:]]*\{ ]]; then
+            cur_name=""
+            cur_addr=""
+        elif [[ $line =~ name:[[:space:]]*([^[:space:]\{\}]+) ]]; then
+            cur_name="${BASH_REMATCH[1]}"
+        elif [[ $line =~ ring0_addr:[[:space:]]*([^[:space:]\{\}]+) ]]; then
+            cur_addr="${BASH_REMATCH[1]}"
+        fi
+        if [[ -n "$cur_name" && -n "$cur_addr" ]]; then
+            NODE_HOSTNAMES["$cur_addr"]="$cur_name"
+            NODE_IPS["$cur_name"]="$cur_addr"
+            cur_name=""
+            cur_addr=""
+        fi
+    done < /etc/pve/corosync.conf
+}
+
 # ============================================================
 # Remote Execution Helper
 # ============================================================
@@ -147,11 +180,94 @@ run_on_node() {
     local local_host
     local_host="$(hostname -s 2>/dev/null)"
 
-    if [ "$node" = "localhost" ] || [ "$node" = "$local_host" ] || [ "$node" = "$(hostname 2>/dev/null)" ]; then
+    # Resolve cluster hostname to its IP for reliable SSH connectivity
+    local ssh_target="${NODE_IPS[$node]:-$node}"
+
+    if [ "$node" = "localhost" ] || [ "$node" = "$local_host" ] || [ "$node" = "$(hostname 2>/dev/null)" ] || [ "$ssh_target" = "$local_host" ]; then
         bash -c "$cmd"
     else
-        ssh "${SSH_BASE_OPTS[@]}" "root@${node}" "$cmd" 2>/dev/null
+        ssh "${SSH_BASE_OPTS[@]}" "root@${ssh_target}" "$cmd" 2>/dev/null
     fi
+}
+
+# ============================================================
+# Node Name Formatting
+# ============================================================
+
+# Returns display string: "hostname (IP)", "hostname", or "IP"
+# Uses cluster mapping first, then /etc/hosts (NO DNS lookups)
+format_node_name() {
+    local node="$1"
+    local hostname ip
+
+    # Priority 1: Known cluster hostname -> "hostname (IP)"
+    if [[ -n "${NODE_IPS[$node]:-}" ]]; then
+        echo "$node (${NODE_IPS[$node]})"
+        return
+    fi
+
+    # Priority 2: Known cluster IP -> "hostname (IP)"
+    if [[ -n "${NODE_HOSTNAMES[$node]:-}" ]]; then
+        echo "${NODE_HOSTNAMES[$node]} ($node)"
+        return
+    fi
+
+    # Priority 3: External node - /etc/hosts ONLY (no DNS)
+    if [[ $node =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        hostname="$(grep -E "^${node}[[:space:]]" /etc/hosts | awk '{print $2}' | head -1)"
+        if [[ -n "$hostname" ]]; then
+            echo "$hostname ($node)"
+        else
+            echo "$node"
+        fi
+    else
+        ip="$(grep -E "[[:space:]]${node}([[:space:]]|$)" /etc/hosts | awk '{print $1}' | head -1)"
+        if [[ -n "$ip" ]]; then
+            echo "$node ($ip)"
+        else
+            echo "$node"
+        fi
+    fi
+}
+
+# Returns pipe-separated: hostname_json|ip_json|display_name|in_cluster
+# Used for JSON output fields
+get_node_meta() {
+    local node="$1"
+    local hostname="" ip="" display_name in_cluster
+
+    if [[ -n "${NODE_IPS[$node]:-}" ]]; then
+        hostname="$node"
+        ip="${NODE_IPS[$node]}"
+        in_cluster="true"
+    elif [[ -n "${NODE_HOSTNAMES[$node]:-}" ]]; then
+        hostname="${NODE_HOSTNAMES[$node]}"
+        ip="$node"
+        in_cluster="true"
+    else
+        in_cluster="false"
+        if [[ $node =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            ip="$node"
+            hostname="$(grep -E "^${node}[[:space:]]" /etc/hosts | awk '{print $2}' | head -1)"
+        else
+            hostname="$node"
+            ip="$(grep -E "[[:space:]]${node}([[:space:]]|$)" /etc/hosts | awk '{print $1}' | head -1)"
+        fi
+    fi
+
+    if [[ -n "$hostname" && -n "$ip" ]]; then
+        display_name="$hostname ($ip)"
+    elif [[ -n "$hostname" ]]; then
+        display_name="$hostname"
+    else
+        display_name="$ip"
+    fi
+
+    local hostname_json ip_json
+    [[ -n "$hostname" ]] && hostname_json="\"$hostname\"" || hostname_json="null"
+    [[ -n "$ip" ]]       && ip_json="\"$ip\""             || ip_json="null"
+
+    echo "${hostname_json}|${ip_json}|${display_name}|${in_cluster}"
 }
 
 # ============================================================
@@ -264,8 +380,15 @@ cmd_get() {
             [ "$first_node" = false ] && json_nodes+=","
             first_node=false
 
+            local meta m_hostname_json m_ip_json m_display m_in_cluster m_rest
+            meta="$(get_node_meta "$node")"
+            m_hostname_json="${meta%%|*}"; m_rest="${meta#*|}"
+            m_ip_json="${m_rest%%|*}";     m_rest="${m_rest#*|}"
+            m_display="${m_rest%%|*}"
+            m_in_cluster="${m_rest##*|}"
+
             if [ -z "$gov_raw" ]; then
-                json_nodes+="{\"name\":\"$node\",\"status\":\"error\",\"message\":\"Connection failed or no cpufreq support\"}"
+                json_nodes+="{\"hostname\":${m_hostname_json},\"ip\":${m_ip_json},\"display_name\":\"${m_display}\",\"in_cluster\":${m_in_cluster},\"status\":\"error\",\"message\":\"Connection failed or no cpufreq support\"}"
                 continue
             fi
 
@@ -295,7 +418,7 @@ cmd_get() {
             local mixed_str="false"
             [ "$mixed" = true ] && mixed_str="true"
 
-            json_nodes+="{\"name\":\"$node\",\"status\":\"success\",\"cpus\":$cpu_count,\"governors\":$gov_json,\"mixed\":$mixed_str,\"available_governors\":$avail_json}"
+            json_nodes+="{\"hostname\":${m_hostname_json},\"ip\":${m_ip_json},\"display_name\":\"${m_display}\",\"in_cluster\":${m_in_cluster},\"status\":\"success\",\"cpus\":$cpu_count,\"governors\":$gov_json,\"mixed\":$mixed_str,\"available_governors\":$avail_json}"
         done
 
         json_nodes+="]"
@@ -307,8 +430,11 @@ cmd_get() {
         local gov_raw
         gov_raw="$(get_governors_on_node "$node" 2>/dev/null)"
 
+        local display
+        display="$(format_node_name "$node")"
+
         if [ -z "$gov_raw" ]; then
-            log_error "$node: Connection failed or no cpufreq support"
+            log_error "$display: Connection failed or no cpufreq support"
             continue
         fi
 
@@ -338,7 +464,7 @@ cmd_get() {
             fi
         fi
 
-        echo -e "${node}: ${gov_display}${status}${temp_str}"
+        echo -e "${display}: ${gov_display}${status}${temp_str}"
     done
 }
 
@@ -362,12 +488,19 @@ cmd_list_available() {
             [ "$first_node" = false ] && json_nodes+=","
             first_node=false
 
+            local meta m_hostname_json m_ip_json m_display m_in_cluster m_rest
+            meta="$(get_node_meta "$node")"
+            m_hostname_json="${meta%%|*}"; m_rest="${meta#*|}"
+            m_ip_json="${m_rest%%|*}";     m_rest="${m_rest#*|}"
+            m_display="${m_rest%%|*}"
+            m_in_cluster="${m_rest##*|}"
+
             if [ -z "$avail" ]; then
-                json_nodes+="{\"name\":\"$node\",\"status\":\"error\",\"available_governors\":[]}"
+                json_nodes+="{\"hostname\":${m_hostname_json},\"ip\":${m_ip_json},\"display_name\":\"${m_display}\",\"in_cluster\":${m_in_cluster},\"status\":\"error\",\"available_governors\":[]}"
             else
                 local avail_json
                 avail_json="$(build_governors_json_array "$avail")"
-                json_nodes+="{\"name\":\"$node\",\"status\":\"success\",\"available_governors\":$avail_json}"
+                json_nodes+="{\"hostname\":${m_hostname_json},\"ip\":${m_ip_json},\"display_name\":\"${m_display}\",\"in_cluster\":${m_in_cluster},\"status\":\"success\",\"available_governors\":$avail_json}"
             fi
         done
 
@@ -379,10 +512,12 @@ cmd_list_available() {
     for node in "${nodes[@]}"; do
         local avail
         avail="$(get_available_governors_on_node "$node" 2>/dev/null)"
+        local display
+        display="$(format_node_name "$node")"
         if [ -z "$avail" ]; then
-            log_error "$node: Could not retrieve available governors"
+            log_error "$display: Could not retrieve available governors"
         else
-            echo "$node: $avail"
+            echo "$display: $avail"
         fi
     done
 }
@@ -396,6 +531,97 @@ cmd_set() {
     shift
     local nodes=("$@")
 
+    # ── Per-node governor mode: set node1:perf,node2:pow ──────────────────
+    if [ -n "$PER_NODE_GOVERNORS" ]; then
+        log_info "Starting per-node governor changes"
+
+        if [ "$DO_BACKUP" = true ]; then
+            log_info "Backing up current governor state before change..."
+            cmd_backup "${nodes[@]}"
+        fi
+
+        if [ "$JSON_OUTPUT" = true ]; then
+            local timestamp
+            timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            local json_nodes="["
+            local first_node=true
+
+            local pair pnode pgov
+            IFS=',' read -ra pairs <<< "$PER_NODE_GOVERNORS"
+            for pair in "${pairs[@]}"; do
+                pnode="${pair%%:*}"
+                pgov="${pair#*:}"
+
+                [ "$first_node" = false ] && json_nodes+=","
+                first_node=false
+
+                local meta m_hostname_json m_ip_json m_display m_in_cluster m_rest
+                meta="$(get_node_meta "$pnode")"
+                m_hostname_json="${meta%%|*}"; m_rest="${meta#*|}"
+                m_ip_json="${m_rest%%|*}";     m_rest="${m_rest#*|}"
+                m_display="${m_rest%%|*}"
+                m_in_cluster="${m_rest##*|}"
+
+                local avail
+                avail="$(get_available_governors_on_node "$pnode" 2>/dev/null)"
+                if [ -n "$avail" ] && ! echo " $avail " | grep -qw "$pgov"; then
+                    json_nodes+="{\"hostname\":${m_hostname_json},\"ip\":${m_ip_json},\"display_name\":\"${m_display}\",\"in_cluster\":${m_in_cluster},\"status\":\"error\",\"message\":\"Governor not available: $pgov\",\"available_governors\":$(build_governors_json_array "$avail")}"
+                    continue
+                fi
+
+                local result
+                result="$(set_governor_on_node "$pnode" "$pgov" 2>/dev/null)"
+                if echo "$result" | grep -q "^SET:"; then
+                    local count="${result#SET:}"
+                    json_nodes+="{\"hostname\":${m_hostname_json},\"ip\":${m_ip_json},\"display_name\":\"${m_display}\",\"in_cluster\":${m_in_cluster},\"status\":\"success\",\"cpus\":$count,\"governor\":\"$pgov\"}"
+                else
+                    local err_msg="${result#ERROR: }"
+                    json_nodes+="{\"hostname\":${m_hostname_json},\"ip\":${m_ip_json},\"display_name\":\"${m_display}\",\"in_cluster\":${m_in_cluster},\"status\":\"error\",\"message\":\"${err_msg:-Connection timeout}\"}"
+                fi
+            done
+
+            json_nodes+="]"
+            echo "{\"timestamp\":\"$timestamp\",\"command\":\"set\",\"nodes\":$json_nodes}"
+            return
+        fi
+
+        local success_count=0
+        IFS=',' read -ra pairs <<< "$PER_NODE_GOVERNORS"
+        for pair in "${pairs[@]}"; do
+            pnode="${pair%%:*}"
+            pgov="${pair#*:}"
+            local display
+            display="$(format_node_name "$pnode")"
+
+            local avail
+            avail="$(get_available_governors_on_node "$pnode" 2>/dev/null)"
+            if [ -n "$avail" ] && ! echo " $avail " | grep -qw "$pgov"; then
+                log_warning "$display: Governor not available: $pgov"
+                continue
+            fi
+
+            local result
+            result="$(set_governor_on_node "$pnode" "$pgov" 2>/dev/null)"
+            if echo "$result" | grep -q "^SET:"; then
+                local count="${result#SET:}"
+                log_success "$display: ${count} CPUs set to $pgov"
+                success_count=$((success_count + 1))
+            elif echo "$result" | grep -q "^ERROR:"; then
+                local err_msg="${result#ERROR: }"
+                log_error "$display: $err_msg"
+            else
+                log_error "$display: Connection timeout"
+            fi
+        done
+
+        if [ $success_count -gt 0 ]; then
+            log_info "Verifying governor changes..."
+            cmd_get "${nodes[@]}"
+        fi
+        return
+    fi
+
+    # ── Standard mode: same governor for all nodes ────────────────────────
     if [ -z "$governor" ]; then
         log_error "No governor specified for 'set' command"
         usage
@@ -422,8 +648,15 @@ cmd_set() {
             [ "$first_node" = false ] && json_nodes+=","
             first_node=false
 
+            local meta m_hostname_json m_ip_json m_display m_in_cluster m_rest
+            meta="$(get_node_meta "$node")"
+            m_hostname_json="${meta%%|*}"; m_rest="${meta#*|}"
+            m_ip_json="${m_rest%%|*}";     m_rest="${m_rest#*|}"
+            m_display="${m_rest%%|*}"
+            m_in_cluster="${m_rest##*|}"
+
             if [ -n "$avail" ] && ! echo " $avail " | grep -qw "$governor"; then
-                json_nodes+="{\"name\":\"$node\",\"status\":\"error\",\"message\":\"Governor not available: $governor\",\"available_governors\":$(build_governors_json_array "$avail")}"
+                json_nodes+="{\"hostname\":${m_hostname_json},\"ip\":${m_ip_json},\"display_name\":\"${m_display}\",\"in_cluster\":${m_in_cluster},\"status\":\"error\",\"message\":\"Governor not available: $governor\",\"available_governors\":$(build_governors_json_array "$avail")}"
                 continue
             fi
 
@@ -432,10 +665,10 @@ cmd_set() {
 
             if echo "$result" | grep -q "^SET:"; then
                 local count="${result#SET:}"
-                json_nodes+="{\"name\":\"$node\",\"status\":\"success\",\"cpus\":$count,\"governor\":\"$governor\"}"
+                json_nodes+="{\"hostname\":${m_hostname_json},\"ip\":${m_ip_json},\"display_name\":\"${m_display}\",\"in_cluster\":${m_in_cluster},\"status\":\"success\",\"cpus\":$count,\"governor\":\"$governor\"}"
             else
                 local err_msg="${result#ERROR: }"
-                json_nodes+="{\"name\":\"$node\",\"status\":\"error\",\"message\":\"${err_msg:-Connection timeout}\"}"
+                json_nodes+="{\"hostname\":${m_hostname_json},\"ip\":${m_ip_json},\"display_name\":\"${m_display}\",\"in_cluster\":${m_in_cluster},\"status\":\"error\",\"message\":\"${err_msg:-Connection timeout}\"}"
             fi
         done
 
@@ -449,9 +682,11 @@ cmd_set() {
     for node in "${nodes[@]}"; do
         local avail
         avail="$(get_available_governors_on_node "$node" 2>/dev/null)"
+        local display
+        display="$(format_node_name "$node")"
 
         if [ -n "$avail" ] && ! echo " $avail " | grep -qw "$governor"; then
-            log_warning "$node: Governor not available: $governor"
+            log_warning "$display: Governor not available: $governor"
             continue
         fi
 
@@ -460,13 +695,13 @@ cmd_set() {
 
         if echo "$result" | grep -q "^SET:"; then
             local count="${result#SET:}"
-            log_success "$node: ${count} CPUs set to $governor"
+            log_success "$display: ${count} CPUs set to $governor"
             success_count=$((success_count + 1))
         elif echo "$result" | grep -q "^ERROR:"; then
             local err_msg="${result#ERROR: }"
-            log_error "$node: $err_msg"
+            log_error "$display: $err_msg"
         else
-            log_error "$node: Connection timeout"
+            log_error "$display: Connection timeout"
         fi
     done
 
@@ -540,7 +775,7 @@ cmd_restore() {
         node_section="$(echo "$backup_content" | grep -oP "\"${node}\":\{[^}]*\}" | head -1)"
 
         if [ -z "$node_section" ]; then
-            log_warning "$node: No backup data found for this node"
+            log_warning "$(format_node_name "$node"): No backup data found for this node"
             continue
         fi
 
@@ -555,7 +790,7 @@ cmd_restore() {
         done < <(echo "$node_section" | grep -oP '"cpu[0-9]+":"[^"]*"')
 
         if [ -z "$restore_cmds" ]; then
-            log_warning "$node: Backup data is empty or unreadable"
+            log_warning "$(format_node_name "$node"): Backup data is empty or unreadable"
             continue
         fi
 
@@ -565,9 +800,9 @@ cmd_restore() {
         if echo "$result" | grep -q "^FAIL:"; then
             local failed_cpus
             failed_cpus="$(echo "$result" | grep "^FAIL:" | sed 's/^FAIL://' | tr '\n' ' ')"
-            log_warning "$node: Failed to restore CPUs: $failed_cpus"
+            log_warning "$(format_node_name "$node"): Failed to restore CPUs: $failed_cpus"
         else
-            log_success "$node: Governor state restored"
+            log_success "$(format_node_name "$node"): Governor state restored"
         fi
     done
 }
@@ -581,14 +816,18 @@ usage() {
 Usage: $SCRIPT_NAME [COMMAND] [ARGUMENTS] [OPTIONS]
 
 Commands:
-  get                   Get current CPU governors (default)
-  list-available        List available governors per node
-  set <governor>        Set governor on nodes
+  get [nodes]           Get current CPU governors (default)
+  list-available [nodes]
+                        List available governors per node
+  set <governor> [nodes]
+                        Set governor on all or specified nodes
+  set <node:gov,...>    Set per-node governors (e.g. node1:performance,node2:powersave)
   backup                Save current governor state to file
   restore               Restore previously saved state
 
-Node Selection:
-  --nodes node1,node2   Comma-separated list of nodes
+Node Selection (positional or flag, positional takes precedence):
+  [nodes]               Comma-separated list of nodes (hostnames or IPs)
+  --nodes node1,node2   Same as positional nodes argument
   --all                 All cluster nodes (default)
 
 Output Options:
@@ -612,10 +851,13 @@ Log format:
 Examples:
   $SCRIPT_NAME
   $SCRIPT_NAME get
-  $SCRIPT_NAME get --nodes pve1,pve2 --show-temp
+  $SCRIPT_NAME get node1,node2 --show-temp
+  $SCRIPT_NAME get 192.168.1.10,192.168.1.11
   $SCRIPT_NAME list-available
   $SCRIPT_NAME set performance
-  $SCRIPT_NAME set powersave --nodes pve1 --backup
+  $SCRIPT_NAME set powersave node1,node2
+  $SCRIPT_NAME set powersave 192.168.1.10 --backup
+  $SCRIPT_NAME set node1:performance,node2:powersave
   $SCRIPT_NAME set performance --json
   $SCRIPT_NAME backup
   $SCRIPT_NAME restore
@@ -631,6 +873,8 @@ EOF
 # ============================================================
 
 parse_args() {
+    local -a positional=()
+
     while [ $# -gt 0 ]; do
         case "$1" in
             get|list-available|backup|restore)
@@ -639,10 +883,6 @@ parse_args() {
                 ;;
             set)
                 COMMAND="set"
-                if [ -n "${2:-}" ] && [[ "${2}" != --* ]]; then
-                    GOVERNOR="$2"
-                    shift
-                fi
                 shift
                 ;;
             --nodes)
@@ -698,13 +938,41 @@ parse_args() {
                 usage
                 exit 0
                 ;;
-            *)
+            --*)
                 log_error "Unknown option: $1"
                 usage
                 exit 1
                 ;;
+            *)
+                positional+=("$1")
+                shift
+                ;;
         esac
     done
+
+    # Process positional arguments
+    if [ "$COMMAND" = "set" ]; then
+        if [ ${#positional[@]} -ge 1 ]; then
+            local first="${positional[0]}"
+            # Per-node governor syntax: node1:gov1,node2:gov2
+            if echo "$first" | grep -q ":"; then
+                PER_NODE_GOVERNORS="$first"
+            else
+                GOVERNOR="$first"
+                # Second positional arg is an optional nodes list
+                if [ ${#positional[@]} -ge 2 ] && [ -z "$NODES_ARG" ]; then
+                    NODES_ARG="${positional[1]}"
+                    ALL_NODES=false
+                fi
+            fi
+        fi
+    else
+        # For get / list-available / backup / restore
+        if [ ${#positional[@]} -ge 1 ] && [ -z "$NODES_ARG" ]; then
+            NODES_ARG="${positional[0]}"
+            ALL_NODES=false
+        fi
+    fi
 }
 
 # ============================================================
@@ -717,9 +985,19 @@ main() {
     # Rebuild SSH options with configured timeout
     SSH_BASE_OPTS=(-o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout="${SSH_TIMEOUT}")
 
+    # Build hostname<->IP mapping from /etc/pve/corosync.conf (no-op if file absent)
+    build_node_mapping
+
     # Determine nodes
     local nodes=()
-    if [ -n "$NODES_ARG" ]; then
+    if [ "$COMMAND" = "set" ] && [ -n "$PER_NODE_GOVERNORS" ]; then
+        # Per-node mode: extract node identifiers from the pairs
+        local pair
+        IFS=',' read -ra pairs <<< "$PER_NODE_GOVERNORS"
+        for pair in "${pairs[@]}"; do
+            nodes+=("${pair%%:*}")
+        done
+    elif [ -n "$NODES_ARG" ]; then
         IFS=',' read -ra nodes <<< "$NODES_ARG"
     else
         mapfile -t nodes < <(get_cluster_nodes | tr ' ' '\n' | grep -v '^$')
