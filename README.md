@@ -136,15 +136,17 @@ A comprehensive tool for managing CPU power governor settings across all nodes i
 #### Features
 
 - **Node auto-detection**: Reads `/etc/pve/corosync.conf` or `/etc/pve/.members`; falls back to `pvecm nodes` or `localhost`
+- **Hostname/IP display**: Resolves each node to `hostname (IP)` format using the cluster mapping and `/etc/hosts` (no DNS lookups)
 - **Get current governors**: Displays per-node CPU governor status, detecting mixed-governor nodes
 - **List available governors**: Shows which governors are supported on each node
-- **Set governors**: Change governor on one, several, or all nodes with optional pre-change backup and post-change verification
+- **Set governors**: Change governor on one, several, or all nodes with optional pre-change backup and post-change verification; supports per-node governor syntax (`node1:performance,node2:powersave`)
 - **Backup / Restore**: Save and restore per-CPU governor state to `/etc/pve/.clusterPerformance.backup`
-- **JSON output**: Machine-readable JSON for scripting and monitoring pipelines
+- **JSON output**: Machine-readable JSON for scripting and monitoring pipelines, including `hostname`, `ip`, `display_name`, and `in_cluster` fields
 - **Temperature monitoring**: Reads `/sys/class/thermal/thermal_zone*/temp` and reports average / max CPU temperature per node
 - **Structured logging**: Timestamped log lines at INFO / SUCCESS / WARNING / ERROR levels; supports log file and syslog (daemon facility)
 - **Quiet mode**: `-q/--quiet` suppresses stdout for cron usage
 - **Configurable SSH timeout**: `--timeout <seconds>` (default: 10 s)
+- **Flexible node input**: Nodes can be specified as hostnames, IP addresses, or a mix
 
 #### Requirements
 
@@ -165,14 +167,18 @@ chmod +x bin/clusterPerformance.sh
 clusterPerformance.sh [COMMAND] [ARGUMENTS] [OPTIONS]
 
 Commands:
-  get                   Get current CPU governors (default)
-  list-available        List available governors per node
-  set <governor>        Set governor on nodes
+  get [nodes]           Get current CPU governors (default)
+  list-available [nodes]
+                        List available governors per node
+  set <governor> [nodes]
+                        Set governor on all or specified nodes
+  set <node:gov,...>    Set per-node governors (e.g. node1:performance,node2:powersave)
   backup                Save current governor state to file
   restore               Restore previously saved state
 
-Node Selection:
-  --nodes node1,node2   Comma-separated list of nodes
+Node Selection (positional or flag, positional takes precedence):
+  [nodes]               Comma-separated list (hostnames or IPs)
+  --nodes node1,node2   Same as positional nodes argument
   --all                 All cluster nodes (default)
 
 Output Options:
@@ -199,8 +205,9 @@ Other Options:
 # Show governors with CPU temperatures
 ./bin/clusterPerformance.sh get --show-temp
 
-# Show governors for specific nodes only
-./bin/clusterPerformance.sh get --nodes pve1,pve2
+# Show governors for specific nodes (by hostname or IP)
+./bin/clusterPerformance.sh get pve1,pve2
+./bin/clusterPerformance.sh get 192.168.1.10,192.168.1.11
 
 # List which governors are available on each node
 ./bin/clusterPerformance.sh list-available
@@ -208,8 +215,12 @@ Other Options:
 # Set all nodes to performance governor
 ./bin/clusterPerformance.sh set performance
 
-# Set specific nodes, backup first, log to file
-./bin/clusterPerformance.sh set powersave --nodes pve1 --backup --log-file /var/log/cpugov.log
+# Set specific nodes (positional, no --nodes flag needed)
+./bin/clusterPerformance.sh set powersave pve1,pve2
+./bin/clusterPerformance.sh set powersave 192.168.1.10 --backup --log-file /var/log/cpugov.log
+
+# Set different governors per node
+./bin/clusterPerformance.sh set pve1:performance,pve2:powersave
 
 # Machine-readable JSON output
 ./bin/clusterPerformance.sh get --json
@@ -228,15 +239,15 @@ Other Options:
 
 **Human-readable `get`:**
 ```
-pve1: 24x performance
-pve2: 12x performance, 12x powersave (MIXED)
-pve3: 24x powersave
+pve1 (192.168.1.10): 24x performance
+pve2 (192.168.1.11): 12x performance, 12x powersave (MIXED)
+pve3 (192.168.1.12): 24x powersave
 ```
 
 **Human-readable `get --show-temp`:**
 ```
-pve1: 24x performance (Avg temp: 45°C, Max: 52°C)
-pve2: 12x performance, 12x powersave (MIXED) (Avg temp: 38°C, Max: 41°C)
+pve1 (192.168.1.10): 24x performance (Avg temp: 45°C, Max: 52°C)
+pve2 (192.168.1.11): 12x performance, 12x powersave (MIXED) (Avg temp: 38°C, Max: 41°C)
 ```
 
 **JSON `get --json`:**
@@ -246,7 +257,10 @@ pve2: 12x performance, 12x powersave (MIXED) (Avg temp: 38°C, Max: 41°C)
   "command": "get",
   "nodes": [
     {
-      "name": "pve1",
+      "hostname": "pve1",
+      "ip": "192.168.1.10",
+      "display_name": "pve1 (192.168.1.10)",
+      "in_cluster": true,
       "status": "success",
       "cpus": 24,
       "governors": { "performance": 24 },
@@ -254,7 +268,10 @@ pve2: 12x performance, 12x powersave (MIXED) (Avg temp: 38°C, Max: 41°C)
       "available_governors": ["performance", "powersave", "ondemand", "conservative"]
     },
     {
-      "name": "pve2",
+      "hostname": "pve2",
+      "ip": "192.168.1.11",
+      "display_name": "pve2 (192.168.1.11)",
+      "in_cluster": true,
       "status": "success",
       "cpus": 24,
       "governors": { "performance": 12, "powersave": 12 },
