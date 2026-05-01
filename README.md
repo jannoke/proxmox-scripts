@@ -4,6 +4,16 @@ A collection of useful scripts for Proxmox VE administration and management.
 
 ## Scripts
 
+### Cluster CPU Performance Governor Script
+
+**Location:** `bin/clusterPerformance.sh`
+
+Manages CPU power governor settings (`performance`, `powersave`, etc.) across all Proxmox cluster nodes. Supports get, set, backup/restore, JSON output, logging, and CPU temperature reporting.
+
+> Full documentation including examples, JSON output format, and backup file format is in the [Cluster CPU Performance Governor Script](#cluster-cpu-performance-governor-script-1) section below.
+
+---
+
 ### Disk Inventory Script
 
 **Location:** `bin/disk-inventory.sh`
@@ -117,13 +127,174 @@ Summary
   sudo ./bin/disk-inventory.sh
   ```
 
+### Cluster CPU Performance Governor Script
+
+**Location:** `bin/clusterPerformance.sh`
+
+A comprehensive tool for managing CPU power governor settings across all nodes in a Proxmox VE cluster.
+
+#### Features
+
+- **Node auto-detection**: Reads `/etc/pve/corosync.conf` or `/etc/pve/.members`; falls back to `pvecm nodes` or `localhost`
+- **Get current governors**: Displays per-node CPU governor status, detecting mixed-governor nodes
+- **List available governors**: Shows which governors are supported on each node
+- **Set governors**: Change governor on one, several, or all nodes with optional pre-change backup and post-change verification
+- **Backup / Restore**: Save and restore per-CPU governor state to `/etc/pve/.clusterPerformance.backup`
+- **JSON output**: Machine-readable JSON for scripting and monitoring pipelines
+- **Temperature monitoring**: Reads `/sys/class/thermal/thermal_zone*/temp` and reports average / max CPU temperature per node
+- **Structured logging**: Timestamped log lines at INFO / SUCCESS / WARNING / ERROR levels; supports log file and syslog (daemon facility)
+- **Quiet mode**: `-q/--quiet` suppresses stdout for cron usage
+- **Configurable SSH timeout**: `--timeout <seconds>` (default: 10 s)
+
+#### Requirements
+
+- Proxmox VE 9.x
+- SSH access configured between cluster nodes (typically pre-configured in Proxmox)
+- Root privileges (or sudo)
+- `cpufreq` kernel support on each node
+
+#### Installation
+
+```bash
+chmod +x bin/clusterPerformance.sh
+```
+
+#### Usage
+
+```
+clusterPerformance.sh [COMMAND] [ARGUMENTS] [OPTIONS]
+
+Commands:
+  get                   Get current CPU governors (default)
+  list-available        List available governors per node
+  set <governor>        Set governor on nodes
+  backup                Save current governor state to file
+  restore               Restore previously saved state
+
+Node Selection:
+  --nodes node1,node2   Comma-separated list of nodes
+  --all                 All cluster nodes (default)
+
+Output Options:
+  --json                Output in JSON format
+  --show-temp           Show CPU temperatures alongside governor info
+  -q, --quiet           Minimal output (for cron jobs)
+
+Logging Options:
+  --log-file <file>     Log operations to file
+  --syslog              Log to syslog (daemon facility)
+
+Other Options:
+  --backup              Backup before setting (used with 'set' command)
+  --timeout <seconds>   SSH connection timeout (default: 10)
+  -h, --help            Show this help message
+```
+
+#### Examples
+
+```bash
+# Show current governors on all cluster nodes
+./bin/clusterPerformance.sh get
+
+# Show governors with CPU temperatures
+./bin/clusterPerformance.sh get --show-temp
+
+# Show governors for specific nodes only
+./bin/clusterPerformance.sh get --nodes pve1,pve2
+
+# List which governors are available on each node
+./bin/clusterPerformance.sh list-available
+
+# Set all nodes to performance governor
+./bin/clusterPerformance.sh set performance
+
+# Set specific nodes, backup first, log to file
+./bin/clusterPerformance.sh set powersave --nodes pve1 --backup --log-file /var/log/cpugov.log
+
+# Machine-readable JSON output
+./bin/clusterPerformance.sh get --json
+
+# Save current state to backup file
+./bin/clusterPerformance.sh backup
+
+# Restore saved state
+./bin/clusterPerformance.sh restore
+
+# Cron-friendly: set performance silently, log to syslog
+./bin/clusterPerformance.sh set performance --quiet --syslog
+```
+
+#### Output Examples
+
+**Human-readable `get`:**
+```
+pve1: 24x performance
+pve2: 12x performance, 12x powersave (MIXED)
+pve3: 24x powersave
+```
+
+**Human-readable `get --show-temp`:**
+```
+pve1: 24x performance (Avg temp: 45°C, Max: 52°C)
+pve2: 12x performance, 12x powersave (MIXED) (Avg temp: 38°C, Max: 41°C)
+```
+
+**JSON `get --json`:**
+```json
+{
+  "timestamp": "2026-05-01T22:00:15Z",
+  "command": "get",
+  "nodes": [
+    {
+      "name": "pve1",
+      "status": "success",
+      "cpus": 24,
+      "governors": { "performance": 24 },
+      "mixed": false,
+      "available_governors": ["performance", "powersave", "ondemand", "conservative"]
+    },
+    {
+      "name": "pve2",
+      "status": "success",
+      "cpus": 24,
+      "governors": { "performance": 12, "powersave": 12 },
+      "mixed": true,
+      "available_governors": ["performance", "powersave"]
+    }
+  ]
+}
+```
+
+**Log output (`--log-file`):**
+```
+[2026-05-01 22:00:15] INFO: Starting governor change: powersave
+[2026-05-01 22:00:16] SUCCESS: pve1: 24 CPUs set to powersave
+[2026-05-01 22:00:17] ERROR: pve2: Connection timeout
+[2026-05-01 22:00:18] WARNING: pve3: Governor not available: ondemand
+```
+
+#### Backup File Format
+
+Saved to `/etc/pve/.clusterPerformance.backup`:
+```json
+{
+  "timestamp": "2026-05-01T22:00:15Z",
+  "nodes": {
+    "pve1": { "cpu0": "performance", "cpu1": "performance" },
+    "pve2": { "cpu0": "performance", "cpu1": "powersave" }
+  }
+}
+```
+
 ## Directory Structure
 
 ```
 proxmox-scripts/
-├── bin/                    # Executable scripts
-│   └── disk-inventory.sh   # Main disk inventory script
-├── includes/               # Shared libraries and functions
+├── bin/                           # Executable scripts
+│   ├── clusterPerformance.sh      # CPU governor management script
+│   ├── clusterPerformanceGet.sh   # Legacy CPU governor status script
+│   └── disk-inventory.sh          # Disk inventory script
+├── includes/                      # Shared libraries and functions
 │   └── disk_inventory_lib.sh
 ├── LICENSE
 └── README.md
