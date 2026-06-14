@@ -4,6 +4,16 @@ A collection of useful scripts for Proxmox VE administration and management.
 
 ## Scripts
 
+### Backup Orphan Check Script
+
+**Location:** `bin/backup-orphan-check.sh`
+
+Finds vzdump backup files whose guest IDs no longer exist in Proxmox and reports disk usage consumed by those orphaned backups.
+
+> Full documentation including all flags, output examples, and how it works is in the [Backup Orphan Check Script](#backup-orphan-check-script-1) section below.
+
+---
+
 ### Cluster CPU Performance Governor Script
 
 **Location:** `bin/clusterPerformance.sh`
@@ -126,6 +136,122 @@ Summary
   ```bash
   sudo ./bin/disk-inventory.sh
   ```
+
+### Backup Orphan Check Script
+
+**Location:** `bin/backup-orphan-check.sh`
+
+Scans a vzdump backup directory for backup files whose guest IDs (VMs or CTs) no longer exist in Proxmox, and reports the disk space consumed by those orphaned backups.
+
+#### Features
+
+- **Automatic guest ID detection**: Reads `/etc/pve/nodes/*/qemu-server/*.conf` and `/etc/pve/nodes/*/lxc/*.conf` across all cluster nodes — no SSH required
+- **All vzdump formats**: Handles `.tar.zst`, `.tar.gz`, `.tar.lzo`, `.vma`, `.vma.zst`, `.vma.gz`, `.vma.lzo` extensions
+- **Grouped output**: Results grouped by orphaned guest ID with per-ID subtotals
+- **JSON output**: Machine-readable JSON for scripting and monitoring pipelines
+- **Age filter**: `--min-age` safety net to ignore backups younger than N days (useful for recently deleted guests)
+- **Delete script generation**: Produces a ready-to-review `rm` script — never deletes anything itself
+- **Color-coded display**: Consistent with other scripts in this repository
+
+#### Requirements
+
+- Proxmox VE 9.x
+- Read access to `/etc/pve` (standard on any Proxmox cluster node)
+- Root privileges (or read access to the backup directory)
+
+#### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/jannoke/proxmox-scripts.git
+cd proxmox-scripts
+
+# Make the script executable (if not already)
+chmod +x bin/backup-orphan-check.sh
+```
+
+#### Usage
+
+```
+backup-orphan-check.sh [OPTIONS]
+
+Options:
+  --path <dir>            Backup directory to scan (default: /var/lib/vz/dump)
+  --json                  Output results as JSON instead of human-readable text
+  --min-age <days>        Only report backups older than N days (default: 0)
+  --delete-script [file]  Print rm commands for orphaned files to stdout or to
+                          a file if a path is given. Does NOT delete anything.
+  -h, --help              Show this help message and exit
+```
+
+```bash
+# Scan the default backup directory
+./bin/backup-orphan-check.sh
+
+# Scan a custom backup directory
+./bin/backup-orphan-check.sh --path /mnt/backup/dump
+
+# JSON output
+./bin/backup-orphan-check.sh --json
+
+# Only report backups older than 7 days (safety margin for recently deleted guests)
+./bin/backup-orphan-check.sh --min-age 7
+
+# Generate a deletion script for review, then execute if satisfied
+./bin/backup-orphan-check.sh --delete-script /tmp/cleanup.sh
+cat /tmp/cleanup.sh    # review first!
+bash /tmp/cleanup.sh   # execute when ready
+```
+
+#### Output Example
+
+```
+═══════════════════════════════════════════════════════════════════════════
+                  PROXMOX BACKUP ORPHAN CHECK
+═══════════════════════════════════════════════════════════════════════════
+
+Scan Date:   2026-01-15 03:00:00
+Backup Path: /var/lib/vz/dump
+
+───────────────────────────────────────────────────────────────────────────
+Orphaned Backups by Guest ID
+───────────────────────────────────────────────────────────────────────────
+
+  Guest ID 200 (qemu)
+  FILE                                                                  SIZE  AGE (days)
+  ────────────────────────────────────────────────────────────  ────────────  ──────────
+  vzdump-qemu-200-2024_01_15-03-00-01.tar.zst                       11.8 MiB        42
+  vzdump-qemu-200-2024_02_20-03-00-01.tar.zst                       12.1 MiB         6
+
+  QEMU Subtotal: 23.9 MiB
+
+  Guest ID 201 (lxc)
+  FILE                                                                  SIZE  AGE (days)
+  ────────────────────────────────────────────────────────────  ────────────  ──────────
+  vzdump-lxc-201-2024_01_10-03-00-01.tar.zst                        4.2 MiB        47
+
+  LXC Subtotal: 4.2 MiB
+
+───────────────────────────────────────────────────────────────────────────
+Summary
+───────────────────────────────────────────────────────────────────────────
+  Total orphaned files:  3
+  Total orphaned size:   28.1 MiB
+
+  Orphaned guest IDs:   200 201
+
+═══════════════════════════════════════════════════════════════════════════
+```
+
+#### How It Works
+
+1. **Guest ID collection**: Reads all `.conf` filenames under `/etc/pve/nodes/*/qemu-server/` and `/etc/pve/nodes/*/lxc/` to build the full set of active guest IDs across the entire cluster
+2. **Backup scanning**: Lists all files in the backup directory and extracts guest IDs from vzdump filenames using the standard naming pattern
+3. **Orphan detection**: Compares backup guest IDs against the active set; any ID not found in `/etc/pve` is considered orphaned
+4. **Age filtering**: Optionally skips backups newer than `--min-age` days to avoid flagging backups for recently removed guests
+5. **Reporting**: Displays results grouped by guest ID with file sizes and ages, plus a summary
+
+---
 
 ### Cluster CPU Performance Governor Script
 
@@ -308,6 +434,7 @@ Saved to `/etc/pve/.clusterPerformance.backup`:
 ```
 proxmox-scripts/
 ├── bin/                           # Executable scripts
+│   ├── backup-orphan-check.sh     # Backup orphan check script
 │   ├── clusterPerformance.sh      # CPU governor management script
 │   ├── clusterPerformanceGet.sh   # Legacy CPU governor status script
 │   └── disk-inventory.sh          # Disk inventory script
