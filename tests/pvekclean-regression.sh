@@ -12,7 +12,7 @@ mkdir -p "$MOCK_BIN"
 
 cat > "$MOCK_BIN/uname" <<'MOCK'
 #!/bin/bash
-if [ "$1" = "-r" ]; then
+if [[ "$1" == "-r" ]]; then
   echo "7.0.14-4-pve"
 else
   /usr/bin/uname "$@"
@@ -21,7 +21,7 @@ MOCK
 
 cat > "$MOCK_BIN/df" <<'MOCK'
 #!/bin/bash
-if [ "$1" = "-Ph" ]; then
+if [[ "$1" == "-Ph" ]]; then
   cat <<'OUT'
 Filesystem      Size  Used Avail Use% Mounted on
 /dev/sda1       919M  517M  339M  61% /boot
@@ -52,6 +52,11 @@ proxmox-kernel-7.0.20-1-pve	install ok installed
 pve-headers-7.0.14-4-pve	install ok installed
 proxmox-headers-7.0.20-1-pve	install ok installed
 EOF_FIXTURE
+
+if ! grep -q $'\tinstall ok installed' "$FIXTURE"; then
+  echo "Fixture formatting error: expected tab-separated dpkg-query fields" >&2
+  exit 1
+fi
 
 assert_contains() {
   local haystack="$1"
