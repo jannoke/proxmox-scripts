@@ -450,10 +450,10 @@ Saved to `/etc/pve/.clusterPerformance.backup`:
 ```
 
 Key options:
-- `-k, --keep [number]`
-- `-rn, --remove-newer`
-- `-f, --force`
-- `-d, --dry-run`
+- `-k, --keep [number]` - Keep the specified number of newest detected kernels.
+- `-rn, --remove-newer` - Also remove kernels newer than the running kernel.
+- `-f, --force` - Skip removal confirmation prompts.
+- `-d, --dry-run` - Show what would be removed without changing packages.
 
 ### Regression Validation
 
