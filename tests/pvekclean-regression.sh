@@ -39,6 +39,7 @@ MOCK
 chmod +x "$MOCK_BIN/uname" "$MOCK_BIN/df" "$MOCK_BIN/dpkg-query"
 
 FIXTURE="$TMP_DIR/dpkg-query.txt"
+# Keep tab delimiters to mirror `dpkg-query -W -f='${Package}\t${Status}\n'` output.
 cat > "$FIXTURE" <<'EOF_FIXTURE'
 pve-kernel-6.14	install ok installed
 pve-kernel-6.14.11-9-pve-signed	install ok installed
@@ -57,6 +58,9 @@ assert_contains() {
   local needle="$2"
   if ! grep -Fq "$needle" <<<"$haystack"; then
     echo "Assertion failed: expected output to contain: $needle" >&2
+    echo "--- Captured output ---" >&2
+    printf '%s\n' "$haystack" >&2
+    echo "-----------------------" >&2
     exit 1
   fi
 }
@@ -66,6 +70,9 @@ assert_not_contains() {
   local needle="$2"
   if grep -Fq "$needle" <<<"$haystack"; then
     echo "Assertion failed: expected output to NOT contain: $needle" >&2
+    echo "--- Captured output ---" >&2
+    printf '%s\n' "$haystack" >&2
+    echo "-----------------------" >&2
     exit 1
   fi
 }
@@ -91,5 +98,10 @@ OUTPUT_REMOVE_NEWER="$(run_pvekclean -rn -f -d)"
 assert_contains "$OUTPUT_REMOVE_NEWER" '"7.0.20-1-pve" added to the kernel remove list'
 assert_not_contains "$OUTPUT_REMOVE_NEWER" '"7.0.14-4-pve" added to the kernel remove list'
 assert_not_contains "$OUTPUT_REMOVE_NEWER" '"7.0.14-4-pve-signed" added to the kernel remove list'
+
+OUTPUT_KEEP_ONE="$(run_pvekclean -k 1 -f -d)"
+assert_contains "$OUTPUT_KEEP_ONE" '"6.14.11-9-pve-signed" added to the kernel remove list'
+assert_contains "$OUTPUT_KEEP_ONE" '"6.17.13-15-pve-signed" is being held back from removal'
+assert_not_contains "$OUTPUT_KEEP_ONE" '"6.17.13-15-pve-signed" added to the kernel remove list'
 
 echo "pvekclean regression checks passed"
