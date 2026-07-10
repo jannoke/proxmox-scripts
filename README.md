@@ -24,6 +24,16 @@ Manages CPU power governor settings (`performance`, `powersave`, etc.) across al
 
 ---
 
+### PVE Kernel Cleaner Script
+
+**Location:** `bin/pvekclean.sh`
+
+Removes old Proxmox kernel packages while protecting the running kernel. Kernel discovery uses installed package names only (`pve-kernel-*`, `proxmox-kernel-*`, `pve-headers-*`, `proxmox-headers-*`) and version-aware ordering via `dpkg --compare-versions`.
+
+> Full documentation including options and regression validation is in the [PVE Kernel Cleaner Script](#pve-kernel-cleaner-script) section below.
+
+---
+
 ### Disk Inventory Script
 
 **Location:** `bin/disk-inventory.sh`
@@ -429,6 +439,30 @@ Saved to `/etc/pve/.clusterPerformance.backup`:
 }
 ```
 
+## PVE Kernel Cleaner Script
+
+**Location:** `bin/pvekclean.sh`
+
+### Usage
+
+```bash
+./bin/pvekclean.sh [OPTIONS]
+```
+
+Key options:
+- `-k, --keep [number]` - Keep the specified number of newest detected kernels.
+- `-rn, --remove-newer` - Also remove kernels newer than the running kernel.
+- `-f, --force` - Skip removal confirmation prompts.
+- `-d, --dry-run` - Show what would be removed without changing packages.
+
+### Regression Validation
+
+Run the deterministic regression check for mixed 6.x/7.x package sets, partial-token protection, and running-kernel exclusion:
+
+```bash
+./tests/pvekclean-regression.sh
+```
+
 ## Directory Structure
 
 ```
@@ -437,9 +471,12 @@ proxmox-scripts/
 │   ├── backup-orphan-check.sh     # Backup orphan check script
 │   ├── clusterPerformance.sh      # CPU governor management script
 │   ├── clusterPerformanceGet.sh   # Legacy CPU governor status script
-│   └── disk-inventory.sh          # Disk inventory script
+│   ├── disk-inventory.sh          # Disk inventory script
+│   └── pvekclean.sh               # PVE kernel cleaner script
 ├── includes/                      # Shared libraries and functions
 │   └── disk_inventory_lib.sh
+├── tests/
+│   └── pvekclean-regression.sh    # Deterministic pvekclean regression checks
 ├── LICENSE
 └── README.md
 ```
