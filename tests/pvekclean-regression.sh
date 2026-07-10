@@ -54,7 +54,7 @@ proxmox-headers-7.0.20-1-pve	install ok installed
 EOF_FIXTURE
 
 if ! awk -F '\t' 'NF == 2 && $2 == "install ok installed" { next } { exit 1 }' "$FIXTURE"; then
-  echo "Fixture formatting error: expected tab-separated '<package>\\tinstall ok installed' lines" >&2
+  echo "Fixture formatting error: expected tab-separated '<package>\tinstall ok installed' lines" >&2
   exit 1
 fi
 
