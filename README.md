@@ -28,7 +28,7 @@ Manages CPU power governor settings (`performance`, `powersave`, etc.) across al
 
 **Location:** `bin/pvekclean.sh`
 
-Removes old Proxmox kernel packages while protecting the running kernel. Kernel discovery uses installed package names only (`pve-kernel-*`, `proxmox-kernel-*`, `pve-headers-*`, `proxmox-headers-*`) and package-version-safe ordering.
+Removes old Proxmox kernel packages while protecting the running kernel. Kernel discovery uses installed package names only (`pve-kernel-*`, `proxmox-kernel-*`, `pve-headers-*`, `proxmox-headers-*`) and version-aware ordering via `dpkg --compare-versions`.
 
 > Full documentation including options and regression validation is in the [PVE Kernel Cleaner Script](#pve-kernel-cleaner-script) section below.
 
