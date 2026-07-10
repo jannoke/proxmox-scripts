@@ -54,7 +54,10 @@ proxmox-headers-7.0.20-1-pve	install ok installed
 EOF_FIXTURE
 
 validate_fixture_format() {
-  # Verify each fixture row is exactly "<package>\tinstall ok installed" for expected package name families.
+  # Verify each fixture row:
+  # - has exactly two tab-separated fields (NF == 2)
+  # - has an expected package name prefix (pve/proxmox kernel/headers)
+  # - has status field "install ok installed"
   if ! awk -F '\t' 'NF == 2 && $1 ~ /^(pve|proxmox)-(kernel|headers)-/ && $2 == "install ok installed" { next } { exit 1 }' "$FIXTURE"; then
     echo "Fixture formatting error: expected tab-separated '<package>\tinstall ok installed' lines" >&2
     exit 1
@@ -92,6 +95,7 @@ assert_count() {
   local needle="$2"
   local expected="$3"
   local actual
+  # `grep -c` exits 1 on zero matches; keep the numeric count for exact assertions.
   actual="$(grep -F -c "$needle" <<<"$haystack" || true)"
   if [ "$actual" -ne "$expected" ]; then
     echo "Assertion failed: expected '$needle' count=$expected, got $actual" >&2
