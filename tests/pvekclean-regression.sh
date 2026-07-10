@@ -53,7 +53,7 @@ pve-headers-7.0.14-4-pve	install ok installed
 proxmox-headers-7.0.20-1-pve	install ok installed
 EOF_FIXTURE
 
-if ! awk -F $'\t' 'NF == 2 && $2 == "install ok installed" { next } { exit 1 }' "$FIXTURE"; then
+if ! awk -F '\t' 'NF == 2 && $2 == "install ok installed" { next } { exit 1 }' "$FIXTURE"; then
   echo "Fixture formatting error: expected tab-separated '<package>\\tinstall ok installed' lines" >&2
   exit 1
 fi
@@ -91,6 +91,7 @@ run_pvekclean() {
 }
 
 OUTPUT_DEFAULT="$(run_pvekclean -f -d)"
+assert_contains "$OUTPUT_DEFAULT" 'Removing 2 old PVE kernels...'
 assert_contains "$OUTPUT_DEFAULT" '"6.14.11-9-pve-signed" added to the kernel remove list'
 assert_contains "$OUTPUT_DEFAULT" '"6.17.13-15-pve-signed" added to the kernel remove list'
 assert_not_contains "$OUTPUT_DEFAULT" '"6.14" added to the kernel remove list'
@@ -100,11 +101,13 @@ assert_not_contains "$OUTPUT_DEFAULT" '"7.0.14-4-pve" added to the kernel remove
 assert_not_contains "$OUTPUT_DEFAULT" '"7.0.14-4-pve-signed" added to the kernel remove list'
 
 OUTPUT_REMOVE_NEWER="$(run_pvekclean -rn -f -d)"
+assert_contains "$OUTPUT_REMOVE_NEWER" 'Removing 3 old PVE kernels...'
 assert_contains "$OUTPUT_REMOVE_NEWER" '"7.0.20-1-pve" added to the kernel remove list'
 assert_not_contains "$OUTPUT_REMOVE_NEWER" '"7.0.14-4-pve" added to the kernel remove list'
 assert_not_contains "$OUTPUT_REMOVE_NEWER" '"7.0.14-4-pve-signed" added to the kernel remove list'
 
 OUTPUT_KEEP_ONE="$(run_pvekclean -k 1 -f -d)"
+assert_contains "$OUTPUT_KEEP_ONE" 'Removing 1 old PVE kernel...'
 assert_contains "$OUTPUT_KEEP_ONE" '"6.14.11-9-pve-signed" added to the kernel remove list'
 assert_contains "$OUTPUT_KEEP_ONE" '"6.17.13-15-pve-signed" is being held back from removal'
 assert_not_contains "$OUTPUT_KEEP_ONE" '"6.17.13-15-pve-signed" added to the kernel remove list'
